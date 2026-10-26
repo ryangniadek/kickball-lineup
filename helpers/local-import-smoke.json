@@ -1,0 +1,14 @@
+{
+  "format": "kickball-lineup",
+  "version": 1,
+  "lineup": {
+    "players": [],
+    "order": [],
+    "rotations": { "M": [], "W": [] },
+    "fields": { "four": {}, "rover": {} },
+    "fieldRotations": { "four": [], "rover": [] },
+    "previewInning": { "four": 1, "rover": 1 },
+    "formation": "four",
+    "sample": false
+  }
+}
