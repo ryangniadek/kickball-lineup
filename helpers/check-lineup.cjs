@@ -1,7 +1,7 @@
 const fs = require('fs');
 const vm = require('vm');
 const assert = require('assert');
-const code = fs.readFileSync('outputs/kickball-lineup/app.js', 'utf8');
+const code = fs.readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
 const element = { innerHTML: '', addEventListener() {}, classList: { add() {}, remove() {} } };
 const localStorage = { getItem() { return null; }, setItem() {} };
 const context = vm.createContext({
@@ -68,7 +68,8 @@ const printedDefense = check('printDefense("four")');
 assert.match(printedDefense, /<strong>1B<\/strong><span>Sam<\/span><small>Rotates: Jamie<\/small>/, 'rotating bench player should print under first base');
 assert.match(printedDefense, /<strong>LCF<\/strong><span>Morgan<\/span><small>Rotates: Alex<\/small>/, 'shared bench player should print under first center field spot');
 assert.match(printedDefense, /<strong>RCF<\/strong><span>Casey<\/span><small>Rotates: Alex<\/small>/, 'shared bench player should print under second center field spot');
-assert.ok(printedDefense.includes('Center field:'), 'rotation cycle should print below the field');
+assert.ok(printedDefense.includes('<b>Center field:</b> Morgan, Casey, Alex (Positions: LCF, RCF)'), 'rotation group should print its members and positions');
+assert.ok(!printedDefense.includes(' → '), 'printed rotation notes should not assign players to positions by inning');
 check('render()');
 assert.ok(element.innerHTML.includes('print-sheet') && element.innerHTML.includes('Kicking order'), 'dedicated print sheet should render');
 check('state.fields.four.RF = "sample-10"; state.fieldRotations.four[0].members = ["sample-2","sample-11"]; state.players.push({id:"sample-12",name:"Extra",gender:"M",active:true}); state.fieldRotations.four[1].members = ["sample-7","sample-8","sample-12"]');

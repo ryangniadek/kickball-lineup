@@ -300,8 +300,8 @@ function printDefense(formation) {
     return `<div class="print-field-slot" style="--x:${x}%;--y:${y}%"><strong>${pos === 'ROV' ? 'Rover' : pos}</strong><span>${esc(player(field[pos])?.name || 'Open')}</span>${extras.length ? `<small>Rotates: ${esc(extras.join(', '))}</small>` : ''}</div>`;
   }).join('');
   const rotationNotes = groups.map(group => {
-    const turns = Array.from({ length: group.members.length }, (_, index) => group.slots.map((pos, slot) => `${pos} ${player(group.members[(index + slot) % group.members.length])?.name || 'Open'}`).join(' + '));
-    return `<div><b>${esc(group.name || group.slots.join(' + '))}:</b> ${esc(turns.join(' → '))}</div>`;
+    const members = group.members.map(id => player(id)?.name || 'Unknown');
+    return `<div><b>${esc(group.name || group.slots.join(' + '))}:</b> ${esc(members.join(', '))} (Positions: ${esc(group.slots.join(', '))})</div>`;
   }).join('');
   const groupedBench = new Set(groups.flatMap(group => group.members));
   const onField = new Set(Object.values(field));
