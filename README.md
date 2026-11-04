@@ -1,5 +1,7 @@
 # Kickball lineup board
 
+This is a vibe coded app
+
 Open `index.html` in a browser. No installation or account is needed. The roster and lineups save in this browser on this device.
 
 Use **Export** in the header to download a JSON backup of the roster, kicking order, both defenses, and field rotations. Use **Import** to restore that file in this or another browser. Import replaces the current lineup, and **Undo import** restores the previous one. Keep the JSON file if you want a portable backup.
