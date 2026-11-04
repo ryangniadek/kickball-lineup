@@ -75,4 +75,28 @@ assert.ok(element.innerHTML.includes('print-sheet') && element.innerHTML.include
 check('state.fields.four.RF = "sample-10"; state.fieldRotations.four[0].members = ["sample-2","sample-11"]; state.players.push({id:"sample-12",name:"Extra",gender:"M",active:true}); state.fieldRotations.four[1].members = ["sample-7","sample-8","sample-12"]');
 assert.equal(check('status().four.ready'), false, 'later inning with only 3 women must fail');
 assert.ok(check('status().four.issues.some(issue => issue.includes("Inning 2"))'), 'later inning issue should be visible');
+check('state = sampleState()');
+for (const configuration of ['both', 'rover', 'four']) {
+  check(`printConfiguration = '${configuration}'; render()`);
+  const sheet = element.innerHTML.slice(element.innerHTML.indexOf('<section class="print-sheet'));
+  assert.equal((sheet.match(/class="print-defense"/g) || []).length, configuration === 'both' ? 2 : 1, 'print only the selected defenses');
+  assert.equal(sheet.includes('4 across outfield'), configuration !== 'rover');
+  assert.equal(sheet.includes('Right-side rover'), configuration !== 'four');
+  assert.ok(sheet.includes('Kicking order'), 'every print selection keeps the kicking order');
+  assert.ok(check('printReady()'), 'valid sample can print in every configuration');
+}
+check('state.fields.rover = {}; printConfiguration = "four"; render()');
+assert.equal(check('printReady()'), true, 'an incomplete omitted defense must not block printing');
+assert.ok(!/id="print-lineup"[^>]*disabled/.test(element.innerHTML), 'selected valid defense enables print button');
+check('printConfiguration = "both"');
+assert.equal(check('printReady()'), false, 'both defenses must pass when both are selected');
+check('printConfiguration = "rover"; render()');
+assert.equal(check('printReady()'), false, 'selected incomplete defense blocks printing');
+assert.ok(/id="print-lineup"[^>]*disabled/.test(element.innerHTML), 'invalid selected defense disables print button');
+assert.ok(element.innerHTML.includes('DRAFT LINEUP'), 'browser printing must not label an incomplete selection ready');
+check('state = sampleState(); state.fields.four = {}; printConfiguration = "rover"');
+assert.equal(check('printReady()'), true, 'rover can print when four outfielders is incomplete');
+check('state.order = []');
+assert.equal(check('printReady()'), false, 'the kicking order must pass even for one defense');
+check('state = sampleState(); printConfiguration = "both"');
 console.log('Lineup rules checks passed.');

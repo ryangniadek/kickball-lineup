@@ -38,6 +38,7 @@ const app = document.getElementById('app');
 let message = '';
 let drag = null;
 let draftGroup = null;
+let printConfiguration = 'both';
 
 const player = id => state.players.find(p => p.id === id);
 const activePlayers = () => state.players.filter(p => p.active);
@@ -308,6 +309,12 @@ function printDefense(formation) {
   const otherBench = activePlayers().filter(p => !onField.has(p.id) && !groupedBench.has(p.id));
   return `<section class="print-defense"><h2>${formation === 'four' ? '4 across outfield' : 'Right-side rover'}</h2><div class="print-field"><div class="print-diamond"></div>${slots}</div><div class="print-defense-notes">${rotationNotes || '<div>No field rotations set</div>'}${otherBench.length ? `<div><b>Other available:</b> ${esc(otherBench.map(p => p.name).join(', '))}</div>` : ''}</div></section>`;
 }
+function printFormations() {
+  return printConfiguration === 'both' ? ['four', 'rover'] : [printConfiguration];
+}
+function printReady(checks = status()) {
+  return checks.order.ready && printFormations().every(formation => checks[formation].ready);
+}
 function printOrder() {
   if (usesSplitRotation()) {
     const lane = (gender, columns) => {
@@ -342,8 +349,8 @@ function render() {
       <div class="bench"><div class="subheading"><h3>Available on bench</h3><span>${active.filter(p => !onField.has(p.id)).length}</span></div><div class="bench-list drop-target" data-drop="bench">${active.filter(p => !onField.has(p.id)).map(p => playerChip(p, 'bench')).join('') || '<span class="bench-empty">Everyone is on the field</span>'}</div></div>${fieldRotationPanel()}</section>
       ${orderPanel(active, checks.order)}
     </main>
-    <section class="rules-panel"><div class="rules-title"><div><h2>Lineup checks</h2><p>Based on the TRI SPORTS rules, revised February 2025</p></div><button id="print-lineup" class="print-button" ${checks.ready ? '' : 'disabled'}>Print ready lineup</button></div><div class="check-grid">${reportMarkup(checks.four, 'four')}${reportMarkup(checks.rover, 'rover')}<div class="check-row ${checks.order.ready ? 'good' : 'warn'}"><span class="check-icon">${checks.order.ready ? '✓' : '!'}</span><span><strong>Kicking order</strong><small>${checks.order.split ? state.rotations.M.length + state.rotations.W.length : state.order.length} kickers · ${checks.order.women} women</small></span><b>${labelStatus(checks.order.ready, checks.order.missing.length > 0)}</b></div></div><div class="issue-list">${[...new Set([...current.issues, ...checks.order.issues])].map(issue => `<p>• ${esc(issue)}</p>`).join('') || '<p class="all-clear">This defense and kicking order pass the lineup checks.</p>'}</div><p class="rules-footnote">10 fielders: 6 infield + 4 outfield, with 4+ women. 9 fielders: 6 infield + 3 outfield, with 3+ women. All available players kick. Alternate genders when possible, and never place 3 men consecutively. When one full order cannot satisfy that, the board runs separate gender rotations starting M/W/M, with two men between women thereafter. Set your order before the game; the league restricts changes during play.</p></section>
-    <section class="print-sheet ${checks.order.split ? 'split-print' : ''}"><div class="print-header"><div><h1>Kickball lineup</h1><p>Game: ____________________ &nbsp; Date: __________</p></div><div class="print-ready">READY LINEUP</div></div><div class="print-defenses">${printDefense('four')}${printDefense('rover')}</div><section class="print-kicking"><h2>Kicking order</h2>${printOrder()}</section></section>
+    <section class="rules-panel"><div class="rules-title"><div><h2>Lineup checks</h2><p>Based on the TRI SPORTS rules, revised February 2025</p></div><div class="print-controls"><label for="print-configuration">Print / PDF</label><select id="print-configuration"><option value="both" ${printConfiguration === 'both' ? 'selected' : ''}>Both defenses</option><option value="rover" ${printConfiguration === 'rover' ? 'selected' : ''}>Rover only</option><option value="four" ${printConfiguration === 'four' ? 'selected' : ''}>4 outfielders only</option></select><button id="print-lineup" class="print-button" ${printReady(checks) ? '' : 'disabled'}>Print ready lineup</button></div></div><div class="check-grid">${reportMarkup(checks.four, 'four')}${reportMarkup(checks.rover, 'rover')}<div class="check-row ${checks.order.ready ? 'good' : 'warn'}"><span class="check-icon">${checks.order.ready ? '✓' : '!'}</span><span><strong>Kicking order</strong><small>${checks.order.split ? state.rotations.M.length + state.rotations.W.length : state.order.length} kickers · ${checks.order.women} women</small></span><b>${labelStatus(checks.order.ready, checks.order.missing.length > 0)}</b></div></div><div class="issue-list">${[...new Set([...current.issues, ...checks.order.issues])].map(issue => `<p>• ${esc(issue)}</p>`).join('') || '<p class="all-clear">This defense and kicking order pass the lineup checks.</p>'}</div><p class="rules-footnote">10 fielders: 6 infield + 4 outfield, with 4+ women. 9 fielders: 6 infield + 3 outfield, with 3+ women. All available players kick. Alternate genders when possible, and never place 3 men consecutively. When one full order cannot satisfy that, the board runs separate gender rotations starting M/W/M, with two men between women thereafter. Set your order before the game; the league restricts changes during play.</p></section>
+    <section class="print-sheet ${checks.order.split ? 'split-print' : ''}"><div class="print-header"><div><h1>Kickball lineup</h1><p>Game: ____________________ &nbsp; Date: __________</p></div><div class="print-ready">${printReady(checks) ? 'READY LINEUP' : 'DRAFT LINEUP'}</div></div><div class="print-defenses ${printConfiguration === 'both' ? '' : 'single-defense'}">${printFormations().map(printDefense).join('')}</div><section class="print-kicking"><h2>Kicking order</h2>${printOrder()}</section></section>
     ${message ? `<div class="toast" role="status">${esc(message)}</div>` : ''}
   </div>`;
   bindEvents();
@@ -537,7 +544,14 @@ function bindEvents() {
     draftGroup = null;
     update();
   });
-  document.getElementById('print-lineup').addEventListener('click', () => window.print());
+  document.getElementById('print-configuration').addEventListener('change', event => {
+    printConfiguration = event.target.value;
+    render();
+    document.getElementById('print-configuration').focus();
+  });
+  document.getElementById('print-lineup').addEventListener('click', () => {
+    if (printReady()) window.print();
+  });
   document.querySelectorAll('[data-drag-id]').forEach(el => {
     el.addEventListener('click', event => {
       if (drag?.moved) return;
