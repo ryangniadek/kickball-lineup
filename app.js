@@ -1,7 +1,7 @@
 const RULES_URL = 'https://www.trisportsnc.com/_files/ugd/a303f8_8175c2f662cb451a820b0e9925bddfe0.pdf';
 const STORAGE_KEY = 'trisports-kickball-lineup-v1';
 const BACKUP_KEY = 'trisports-kickball-lineup-before-import-v1';
-const SPLIT_PREVIEW_KICKS = 60;
+const SPLIT_PREVIEW_KICKS = 80;
 const INFIELD = ['P', 'C', '1B', '2B', 'SS', '3B'];
 const OUTFIELD = { four: ['LF', 'LCF', 'RCF', 'RF'], rover: ['LF', 'CF', 'RF', 'ROV'] };
 const POSITIONS = {
@@ -334,7 +334,7 @@ function printOrder() {
       return `<div class="print-order-grid" style="--rows:${Math.ceil(ids.length / columns)}">${ids.map((id, index) => `<span><b>${index + 1}.</b> ${esc(player(id).name)}</span>`).join('')}</div>`;
     };
     const nextKicks = generatedKicks().map((id, index) => `<span class="${player(id)?.gender === 'W' ? 'woman' : ''}"><b>${index + 1}.</b> ${esc(player(id)?.name || 'Open')}</span>`).join('');
-    return `<div class="print-order-columns"><div><h3>Men's rotation</h3>${lane('M', 2)}</div><div><h3>Women's rotation</h3>${lane('W', 1)}</div></div><div class="print-next-kicks"><h3>First ${SPLIT_PREVIEW_KICKS} kicks · read down each column</h3><div class="print-kick-grid">${nextKicks}</div></div><p class="print-order-note">After #${SPLIT_PREVIEW_KICKS}, continue the man, woman, man pattern. Each rotation keeps its own order and loops independently.</p>`;
+    return `<div class="print-order-columns"><div><h3>Men's rotation</h3>${lane('M', 2)}</div><div><h3>Women's rotation</h3>${lane('W', 1)}</div></div><div class="print-next-kicks"><h3>First ${SPLIT_PREVIEW_KICKS} kicks · read down each column</h3><div class="print-kick-grid">${nextKicks}</div></div><p class="print-order-note">After #${SPLIT_PREVIEW_KICKS}, continue each rotation from where it left off, with two men between women.</p>`;
   }
   const ids = state.order.filter(id => player(id)?.active);
   return `<div class="print-order-grid single" style="--rows:${Math.ceil(ids.length / 2)}">${ids.map((id, index) => `<span><b>${index + 1}.</b> ${esc(player(id).name)}</span>`).join('')}</div><p class="print-order-note">Read down each column. After the last kicker, return to #1.</p>`;
