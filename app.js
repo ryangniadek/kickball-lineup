@@ -1,12 +1,14 @@
 const RULES_URL = 'https://www.trisportsnc.com/_files/ugd/a303f8_8175c2f662cb451a820b0e9925bddfe0.pdf';
 const STORAGE_KEY = 'trisports-kickball-lineup-v1';
 const BACKUP_KEY = 'trisports-kickball-lineup-before-import-v1';
+const SPLIT_PREVIEW_KICKS = 60;
 const INFIELD = ['P', 'C', '1B', '2B', 'SS', '3B'];
 const OUTFIELD = { four: ['LF', 'LCF', 'RCF', 'RF'], rover: ['LF', 'CF', 'RF', 'ROV'] };
 const POSITIONS = {
   P: [50, 67], C: [50, 91], '1B': [71, 69], '2B': [62, 52], SS: [38, 52], '3B': [29, 69],
   LF: [17, 25], LCF: [39, 19], RCF: [62, 19], RF: [84, 25], CF: [50, 18], ROV: [78, 45]
 };
+const RIGHT_SHIFT_POSITIONS = { LF: [13, 24], LCF: [34, 18], RCF: [55, 16], RF: [86, 24] };
 const samplePlayers = [
   ['Maya', 'W'], ['Jordan', 'M'], ['Sam', 'M'], ['Avery', 'W'],
   ['Chris', 'M'], ['Taylor', 'W'], ['Drew', 'M'], ['Morgan', 'W'],
@@ -20,7 +22,7 @@ function sampleState() {
     rotations: { M: sampleOrder.filter(id => samplePlayers.find(p => p.id === id)?.gender === 'M'), W: sampleOrder.filter(id => samplePlayers.find(p => p.id === id)?.gender === 'W') },
     fields: { four: { ...sampleField }, rover: { ...sampleField, CF: sampleField.LCF, ROV: sampleField.RCF, LCF: undefined, RCF: undefined } },
     fieldRotations: { four: [], rover: [] }, previewInning: { four: 1, rover: 1 },
-    formation: 'four', selected: null, sample: true
+    formation: 'four', rightShift: false, selected: null, sample: true
   };
 }
 let state;
@@ -34,13 +36,16 @@ if (!state.rotations) state.rotations = {
 };
 if (!state.fieldRotations) state.fieldRotations = { four: [], rover: [] };
 if (!state.previewInning) state.previewInning = { four: 1, rover: 1 };
+state.rightShift = state.rightShift === true;
 const app = document.getElementById('app');
 let message = '';
 let drag = null;
 let draftGroup = null;
-let printConfiguration = 'both';
+let printConfiguration = state.formation;
 
 const player = id => state.players.find(p => p.id === id);
+const usesRightShift = formation => formation === 'four' && state.rightShift;
+const fieldPosition = (formation, pos) => (usesRightShift(formation) && RIGHT_SHIFT_POSITIONS[pos]) || POSITIONS[pos];
 const activePlayers = () => state.players.filter(p => p.active);
 const activeIds = () => new Set(activePlayers().map(p => p.id));
 const usesSplitRotation = () => {
@@ -48,7 +53,7 @@ const usesSplitRotation = () => {
   const women = active.filter(p => p.gender === 'W').length;
   return women > 0 && active.length - women > women * 2;
 };
-function generatedKicks(count = 30) {
+function generatedKicks(count = SPLIT_PREVIEW_KICKS) {
   const men = state.rotations.M.filter(id => player(id)?.active && player(id)?.gender === 'M');
   const women = state.rotations.W.filter(id => player(id)?.active && player(id)?.gender === 'W');
   if (!men.length || !women.length) return [];
@@ -105,7 +110,7 @@ function parseLineupDocument(text) {
     const inning = data.previewInning?.[formation];
     if (Number.isInteger(inning) && inning >= 1 && inning <= 7) previewInning[formation] = inning;
   }
-  return { players: data.players, order: data.order, rotations: { M: data.rotations.M, W: data.rotations.W }, fields: { four: data.fields.four, rover: data.fields.rover }, fieldRotations: { four: data.fieldRotations.four, rover: data.fieldRotations.rover }, previewInning, formation: data.formation, selected: null, sample: Boolean(data.sample) };
+  return { players: data.players, order: data.order, rotations: { M: data.rotations.M, W: data.rotations.W }, fields: { four: data.fields.four, rover: data.fields.rover }, fieldRotations: { four: data.fieldRotations.four, rover: data.fieldRotations.rover }, previewInning, formation: data.formation, rightShift: data.rightShift === true, selected: null, sample: Boolean(data.sample) };
 }
 function exportLineup() {
   const blob = new Blob([JSON.stringify(lineupDocument(), null, 2)], { type: 'application/json' });
@@ -150,11 +155,15 @@ function fieldForInning(formation, inning = 1) {
   }
   return field;
 }
+function fixedFieldEntries(formation, rotationSlots) {
+  return Object.entries(state.fields[formation]).filter(([pos]) => !rotationSlots.has(pos));
+}
 function groupSetupIssues(formation) {
   const issues = [];
+  const groups = state.fieldRotations[formation];
+  const fixedField = fixedFieldEntries(formation, new Set(groups.flatMap(group => group.slots)));
   const occupiedSlots = new Set();
-  const occupiedPlayers = new Set();
-  for (const group of state.fieldRotations[formation]) {
+  for (const group of groups) {
     const name = group.name || group.slots.join(' + ');
     if (!group.slots?.length || group.members.length <= group.slots.length) issues.push(`${name}: add more players than field spots.`);
     for (const pos of group.slots) {
@@ -163,21 +172,24 @@ function groupSetupIssues(formation) {
     }
     for (const id of group.members) {
       if (!player(id)?.active) issues.push(`${name}: remove an unavailable player.`);
-      if (occupiedPlayers.has(id)) issues.push(`${name}: a player is in another rotation group.`);
-      occupiedPlayers.add(id);
-      const outside = Object.keys(state.fields[formation]).find(pos => state.fields[formation][pos] === id && !group.slots.includes(pos));
-      if (outside) issues.push(`${name}: ${player(id)?.name || 'A player'} is already assigned to ${outside}.`);
+      const fixedPosition = fixedField.find(([, starter]) => starter === id)?.[0];
+      if (fixedPosition) issues.push(`${name}: ${player(id)?.name || 'A player'} has a fixed assignment at ${fixedPosition}.`);
     }
   }
   return [...new Set(issues)];
 }
 function fieldReport(formation, inning = 1) {
   const field = fieldForInning(formation, inning);
-  const ids = [...INFIELD, ...OUTFIELD[formation]].map(pos => field[pos]).filter(Boolean);
+  const positions = [...INFIELD, ...OUTFIELD[formation]];
+  const ids = positions.map(pos => field[pos]).filter(Boolean);
   const women = ids.filter(id => player(id)?.gender === 'W').length;
   const infield = INFIELD.filter(pos => field[pos]).length;
   const outfield = OUTFIELD[formation].filter(pos => field[pos]).length;
   const issues = [];
+  for (const id of new Set(ids)) {
+    const assigned = positions.filter(pos => field[pos] === id);
+    if (assigned.length > 1) issues.push(`${player(id)?.name || 'A player'} is assigned to multiple spots (${assigned.join(', ')}).`);
+  }
   if (infield !== 6) issues.push(`Fill all 6 infield spots (${infield}/6).`);
   if (ids.length < 9) issues.push(`Field at least 9 players (${ids.length}/9).`);
   if (ids.length === 9 && women < 3) issues.push(`A 9-player defense needs at least 3 women (${women}/3).`);
@@ -239,14 +251,15 @@ function playerChip(p, source, extra = '') {
 function fieldSlot(pos) {
   const id = fieldForInning(state.formation, state.previewInning[state.formation])[pos];
   const p = player(id);
-  const [x, y] = POSITIONS[pos];
+  const [x, y] = fieldPosition(state.formation, pos);
   return `<div class="field-slot drop-target ${p ? 'occupied' : ''}" style="--x:${x}%;--y:${y}%" data-drop="field" data-pos="${pos}" tabindex="0" role="button" aria-label="${pos}: ${p ? p.name : 'empty'}. ${state.selected ? 'Place selected player' : 'Select a player then choose this position'}"><div class="position-tag">${pos === 'ROV' ? 'Rover' : pos}</div>${p ? playerChip(p, 'field') : '<span class="empty-person">+</span>'}</div>`;
 }
 function groupCard(group) {
   const name = group.name || group.slots.join(' + ');
   const rows = Array.from({ length: Math.min(7, Math.max(group.members.length, 1)) }, (_, index) => index + 1).map(inning => {
-    const fielders = group.slots.map((pos, index) => `${pos} ${player(group.members[((inning - 1) + index) % group.members.length])?.name || 'Open'}`);
-    const playing = new Set(group.slots.map((_, index) => group.members[((inning - 1) + index) % group.members.length]));
+    const field = fieldForInning(state.formation, inning);
+    const fielders = group.slots.map(pos => `${pos} ${player(field[pos])?.name || 'Open'}`);
+    const playing = new Set(Object.values(field));
     const sitting = group.members.filter(id => !playing.has(id)).map(id => player(id)?.name || 'Unknown');
     return `<div class="group-inning"><b>${inning}</b><span>${esc(fielders.join(' · '))}</span><small>Bench: ${esc(sitting.join(', ') || 'none')}</small></div>`;
   }).join('');
@@ -256,16 +269,15 @@ function groupBuilder() {
   if (!draftGroup || draftGroup.formation !== state.formation) return '';
   const formation = state.formation;
   const blockedSlots = new Set(state.fieldRotations[formation].filter(group => group.id !== draftGroup.id).flatMap(group => group.slots));
-  const blockedPlayers = new Set(state.fieldRotations[formation].filter(group => group.id !== draftGroup.id).flatMap(group => group.members));
-  const fieldIds = new Set(Object.values(state.fields[formation]).filter(Boolean));
-  const bench = state.players.filter(p => (p.active || draftGroup.members.includes(p.id)) && !fieldIds.has(p.id) && !blockedPlayers.has(p.id));
+  const fixedIds = new Set(fixedFieldEntries(formation, blockedSlots).map(([, id]) => id));
   const firstPlayers = draftGroup.slots.map(pos => state.fields[formation][pos]).filter(Boolean);
   const extras = draftGroup.members.filter(id => !firstPlayers.includes(id));
-  const valid = draftGroup.slots.length > 0 && draftGroup.slots.every(pos => state.fields[formation][pos]) && draftGroup.members.length > draftGroup.slots.length && draftGroup.members.every(id => player(id)?.active);
-  return `<div class="group-builder" id="group-builder"><div class="builder-head"><div><h4>${draftGroup.editing ? 'Edit rotation group' : 'New rotation group'}</h4><p>Keep the current field as inning 1. Select the spots, then add bench players.</p></div><button id="cancel-group" aria-label="Cancel rotation group">×</button></div><label class="group-name-label" for="group-name">Group name <span>optional</span></label><input id="group-name" value="${esc(draftGroup.name)}" placeholder="Example: Center field"><div class="builder-step"><strong>1. Field spots</strong><div class="choice-grid">${[...INFIELD, ...OUTFIELD[formation]].map(pos => {
+  const candidates = state.players.filter(p => extras.includes(p.id) || (p.active && !firstPlayers.includes(p.id) && !fixedIds.has(p.id)));
+  const valid = draftGroup.slots.length > 0 && draftGroup.slots.every(pos => state.fields[formation][pos]) && draftGroup.members.length > draftGroup.slots.length && draftGroup.members.every(id => player(id)?.active) && extras.every(id => !fixedIds.has(id));
+  return `<div class="group-builder" id="group-builder"><div class="builder-head"><div><h4>${draftGroup.editing ? 'Edit rotation group' : 'New rotation group'}</h4><p>Select the spots for inning 1, then add players. A player can join more than one group.</p></div><button id="cancel-group" aria-label="Cancel rotation group">×</button></div><label class="group-name-label" for="group-name">Group name <span>optional</span></label><input id="group-name" value="${esc(draftGroup.name)}" placeholder="Example: Center field"><div class="builder-step"><strong>1. Field spots</strong><div class="choice-grid">${[...INFIELD, ...OUTFIELD[formation]].map(pos => {
     const id = state.fields[formation][pos];
-    return `<button class="choice ${draftGroup.slots.includes(pos) ? 'chosen' : ''}" data-group-slot="${pos}" ${(!id && !draftGroup.slots.includes(pos)) || blockedSlots.has(pos) || (id && blockedPlayers.has(id)) ? 'disabled' : ''}><b>${pos === 'ROV' ? 'Rover' : pos}</b><span>${esc(player(id)?.name || 'Empty')}</span></button>`;
-  }).join('')}</div></div><div class="builder-step"><strong>2. Add players from the bench</strong><div class="choice-grid bench-choices">${bench.length ? bench.map(p => `<button class="choice ${draftGroup.members.includes(p.id) ? 'chosen' : ''}" data-group-member="${esc(p.id)}"><b>${esc(p.name)}</b><span>${p.active ? genderName(p.gender) : 'Unavailable'}</span></button>`).join('') : '<p class="builder-empty">No available bench players. Add someone to the roster first.</p>'}</div></div><div class="group-start"><strong>Inning 1</strong><span>${draftGroup.slots.map(pos => `${pos}: ${esc(player(state.fields[formation][pos])?.name || 'Open')}`).join(' · ') || 'Choose a field spot'}</span></div>${extras.length > 1 ? `<div class="extra-order"><strong>Bench rotation order</strong>${extras.map((id, index) => `<div><span>${esc(player(id)?.name || 'Unknown')}</span><button data-extra-move="${esc(id)}" data-direction="up" ${index === 0 ? 'disabled' : ''} aria-label="Move ${esc(player(id)?.name || 'player')} up">↑</button><button data-extra-move="${esc(id)}" data-direction="down" ${index === extras.length - 1 ? 'disabled' : ''} aria-label="Move ${esc(player(id)?.name || 'player')} down">↓</button></div>`).join('')}</div>` : ''}<div class="builder-footer"><p>${valid ? `${draftGroup.members.length} players will share ${draftGroup.slots.length} ${draftGroup.slots.length === 1 ? 'spot' : 'spots'} over seven innings.` : 'Choose at least one field spot and more players than spots.'}</p><button id="save-group" ${valid ? '' : 'disabled'}>Save rotation</button></div></div>`;
+    return `<button class="choice ${draftGroup.slots.includes(pos) ? 'chosen' : ''}" data-group-slot="${pos}" ${(!id && !draftGroup.slots.includes(pos)) || blockedSlots.has(pos) ? 'disabled' : ''}><b>${pos === 'ROV' ? 'Rover' : pos}</b><span>${esc(player(id)?.name || 'Empty')}</span></button>`;
+  }).join('')}</div></div><div class="builder-step"><strong>2. Add rotation players</strong><div class="choice-grid bench-choices">${candidates.length ? candidates.map(p => `<button class="choice ${draftGroup.members.includes(p.id) ? 'chosen' : ''}" data-group-member="${esc(p.id)}"><b>${esc(p.name)}</b><span>${p.active ? genderName(p.gender) : 'Unavailable'}</span></button>`).join('') : '<p class="builder-empty">No available rotation players.</p>'}</div></div><div class="group-start"><strong>Inning 1</strong><span>${draftGroup.slots.map(pos => `${pos}: ${esc(player(state.fields[formation][pos])?.name || 'Open')}`).join(' · ') || 'Choose a field spot'}</span></div>${extras.length > 1 ? `<div class="extra-order"><strong>Bench rotation order</strong>${extras.map((id, index) => `<div><span>${esc(player(id)?.name || 'Unknown')}</span><button data-extra-move="${esc(id)}" data-direction="up" ${index === 0 ? 'disabled' : ''} aria-label="Move ${esc(player(id)?.name || 'player')} up">↑</button><button data-extra-move="${esc(id)}" data-direction="down" ${index === extras.length - 1 ? 'disabled' : ''} aria-label="Move ${esc(player(id)?.name || 'player')} down">↓</button></div>`).join('')}</div>` : ''}<div class="builder-footer"><p>${valid ? `${draftGroup.members.length} players will share ${draftGroup.slots.length} ${draftGroup.slots.length === 1 ? 'spot' : 'spots'} over seven innings.` : 'Choose at least one occupied spot and more available players than spots.'}</p><button id="save-group" ${valid ? '' : 'disabled'}>Save rotation</button></div></div>`;
 }
 function fieldRotationPanel() {
   const groups = state.fieldRotations[state.formation];
@@ -286,8 +298,8 @@ function orderPanel(active, report) {
   if (report.split) {
     const men = state.rotations.M.filter(id => player(id)?.active && player(id)?.gender === 'M');
     const women = state.rotations.W.filter(id => player(id)?.active && player(id)?.gender === 'W');
-    const preview = generatedKicks(30);
-    return `<section class="order-panel panel split-order"><div class="panel-heading"><div><h2>Kicking order</h2><p>Two repeating rotations · starts man, woman, man</p></div><span class="count-pill">${men.length + women.length}/${active.length}</span></div><div class="rotation-explain">Each list stays in order and loops independently. Women can kick again before every man has kicked. The order starts M/W/M, then keeps two men between women.</div><button id="add-selected" class="add-selected" ${state.selected && !state.rotations[player(state.selected)?.gender]?.includes(state.selected) ? '' : 'disabled'}>Add selected player to ${state.selected ? (player(state.selected)?.gender === 'W' ? "women's" : "men's") : 'rotation'}</button><div class="rotation-lanes"><div class="rotation-lane"><div class="subheading"><h3>Men's rotation</h3><span>${men.length}</span></div><div class="rotation-list drop-target" data-drop="rotation" data-lane="M">${orderRows(men, 'M') || '<div class="order-empty">Drop men here</div>'}</div></div><div class="rotation-lane"><div class="subheading"><h3>Women's rotation</h3><span>${women.length}</span></div><div class="rotation-list drop-target" data-drop="rotation" data-lane="W">${orderRows(women, 'W') || '<div class="order-empty">Drop women here</div>'}</div></div></div><div class="sequence-preview"><div class="subheading"><h3>Next 30 kicks · read down each column</h3></div><div class="preview-grid">${preview.map((id, i) => `<div class="preview-kick ${player(id)?.gender === 'W' ? 'woman' : 'man'}"><b>${i + 1}</b><span>${esc(player(id)?.name || '')}</span></div>`).join('')}</div></div><div class="order-footer"><button id="fill-order" class="quiet-button">Add missing players</button><span>Rotations continue from kick 30</span></div></section>`;
+    const preview = generatedKicks();
+    return `<section class="order-panel panel split-order"><div class="panel-heading"><div><h2>Kicking order</h2><p>Two repeating rotations · starts man, woman, man</p></div><span class="count-pill">${men.length + women.length}/${active.length}</span></div><div class="rotation-explain">Each list stays in order and loops independently. Women can kick again before every man has kicked. The order starts M/W/M, then keeps two men between women.</div><button id="add-selected" class="add-selected" ${state.selected && !state.rotations[player(state.selected)?.gender]?.includes(state.selected) ? '' : 'disabled'}>Add selected player to ${state.selected ? (player(state.selected)?.gender === 'W' ? "women's" : "men's") : 'rotation'}</button><div class="rotation-lanes"><div class="rotation-lane"><div class="subheading"><h3>Men's rotation</h3><span>${men.length}</span></div><div class="rotation-list drop-target" data-drop="rotation" data-lane="M">${orderRows(men, 'M') || '<div class="order-empty">Drop men here</div>'}</div></div><div class="rotation-lane"><div class="subheading"><h3>Women's rotation</h3><span>${women.length}</span></div><div class="rotation-list drop-target" data-drop="rotation" data-lane="W">${orderRows(women, 'W') || '<div class="order-empty">Drop women here</div>'}</div></div></div><div class="sequence-preview"><div class="subheading"><h3>Next ${SPLIT_PREVIEW_KICKS} kicks · read down each column</h3></div><div class="preview-grid">${preview.map((id, i) => `<div class="preview-kick ${player(id)?.gender === 'W' ? 'woman' : 'man'}"><b>${i + 1}</b><span>${esc(player(id)?.name || '')}</span></div>`).join('')}</div></div><div class="order-footer"><button id="fill-order" class="quiet-button">Add missing players</button><span>Rotations continue after kick ${SPLIT_PREVIEW_KICKS}</span></div></section>`;
   }
   return `<section class="order-panel panel"><div class="panel-heading"><div><h2>Kicking order</h2><p>Every available player kicks</p></div><span class="count-pill">${state.order.length}/${active.length}</span></div><button id="add-selected" class="add-selected" ${state.selected && !state.order.includes(state.selected) ? '' : 'disabled'}>Add selected player to order</button><div class="order-list drop-target" data-drop="order">${orderRows(state.order) || '<div class="order-empty">Drag a player here, or select one from the roster.</div>'}</div><div class="order-footer"><button id="fill-order" class="quiet-button">Add missing players</button><span>Order wraps back to #1</span></div></section>`;
 }
@@ -295,7 +307,7 @@ function printDefense(formation) {
   const field = fieldForInning(formation, 1);
   const groups = state.fieldRotations[formation];
   const slots = [...INFIELD, ...OUTFIELD[formation]].map(pos => {
-    const [x, y] = POSITIONS[pos];
+    const [x, y] = fieldPosition(formation, pos);
     const group = groups.find(item => item.slots.includes(pos));
     const extras = group?.members.slice(group.slots.length).map(id => player(id)?.name).filter(Boolean) || [];
     return `<div class="print-field-slot" style="--x:${x}%;--y:${y}%"><strong>${pos === 'ROV' ? 'Rover' : pos}</strong><span>${esc(player(field[pos])?.name || 'Open')}</span>${extras.length ? `<small>Rotates: ${esc(extras.join(', '))}</small>` : ''}</div>`;
@@ -307,13 +319,13 @@ function printDefense(formation) {
   const groupedBench = new Set(groups.flatMap(group => group.members));
   const onField = new Set(Object.values(field));
   const otherBench = activePlayers().filter(p => !onField.has(p.id) && !groupedBench.has(p.id));
-  return `<section class="print-defense"><h2>${formation === 'four' ? '4 across outfield' : 'Right-side rover'}</h2><div class="print-field"><div class="print-diamond"></div>${slots}</div><div class="print-defense-notes">${rotationNotes || '<div>No field rotations set</div>'}${otherBench.length ? `<div><b>Other available:</b> ${esc(otherBench.map(p => p.name).join(', '))}</div>` : ''}</div></section>`;
-}
-function printFormations() {
-  return printConfiguration === 'both' ? ['four', 'rover'] : [printConfiguration];
+  const heading = formation === 'four'
+    ? `4 across outfield${usesRightShift(formation) ? ' · Right shift' : ''}`
+    : 'Right-side rover';
+  return `<section class="print-defense"><h2>${heading}</h2><div class="print-field"><div class="print-diamond"></div>${slots}</div><div class="print-defense-notes">${rotationNotes || '<div>No field rotations set</div>'}${otherBench.length ? `<div><b>Other available:</b> ${esc(otherBench.map(p => p.name).join(', '))}</div>` : ''}</div></section>`;
 }
 function printReady(checks = status()) {
-  return checks.order.ready && printFormations().every(formation => checks[formation].ready);
+  return checks.order.ready && checks[printConfiguration].ready;
 }
 function printOrder() {
   if (usesSplitRotation()) {
@@ -321,11 +333,11 @@ function printOrder() {
       const ids = state.rotations[gender].filter(id => player(id)?.active && player(id)?.gender === gender);
       return `<div class="print-order-grid" style="--rows:${Math.ceil(ids.length / columns)}">${ids.map((id, index) => `<span><b>${index + 1}.</b> ${esc(player(id).name)}</span>`).join('')}</div>`;
     };
-    const nextKicks = generatedKicks(30).map((id, index) => `<span class="${player(id)?.gender === 'W' ? 'woman' : ''}"><b>${index + 1}.</b> ${esc(player(id)?.name || 'Open')}</span>`).join('');
-    return `<div class="print-order-columns"><div><h3>Men's rotation</h3>${lane('M', 3)}</div><div><h3>Women's rotation</h3>${lane('W', 2)}</div></div><div class="print-next-kicks"><h3>First 30 kicks · read down each column</h3><div class="print-kick-grid">${nextKicks}</div></div><p class="print-order-note">After #30, continue the man, woman, man pattern. Each rotation keeps its own order and loops independently.</p>`;
+    const nextKicks = generatedKicks().map((id, index) => `<span class="${player(id)?.gender === 'W' ? 'woman' : ''}"><b>${index + 1}.</b> ${esc(player(id)?.name || 'Open')}</span>`).join('');
+    return `<div class="print-order-columns"><div><h3>Men's rotation</h3>${lane('M', 2)}</div><div><h3>Women's rotation</h3>${lane('W', 1)}</div></div><div class="print-next-kicks"><h3>First ${SPLIT_PREVIEW_KICKS} kicks · read down each column</h3><div class="print-kick-grid">${nextKicks}</div></div><p class="print-order-note">After #${SPLIT_PREVIEW_KICKS}, continue the man, woman, man pattern. Each rotation keeps its own order and loops independently.</p>`;
   }
   const ids = state.order.filter(id => player(id)?.active);
-  return `<div class="print-order-grid single" style="--rows:${Math.ceil(ids.length / 6)}">${ids.map((id, index) => `<span><b>${index + 1}.</b> ${esc(player(id).name)}</span>`).join('')}</div><p class="print-order-note">Read down each column. After the last kicker, return to #1.</p>`;
+  return `<div class="print-order-grid single" style="--rows:${Math.ceil(ids.length / 2)}">${ids.map((id, index) => `<span><b>${index + 1}.</b> ${esc(player(id).name)}</span>`).join('')}</div><p class="print-order-note">Read down each column. After the last kicker, return to #1.</p>`;
 }
 function render() {
   const checks = status();
@@ -343,14 +355,15 @@ function render() {
       <p class="panel-tip">Tip: tap a player, then tap a field spot or “Add to order.” Dragging works too.</p></section>
       <section class="field-panel panel"><div class="panel-heading"><div><h2>Defense</h2><p>Set both configurations for game day</p></div><span class="count-pill">${current.ids.length}/10 placed</span></div>
       <div class="formation-tabs" role="tablist" aria-label="Defensive configuration"><button data-formation="four" class="${state.formation === 'four' ? 'active' : ''}" role="tab" aria-selected="${state.formation === 'four'}">4 across outfield</button><button data-formation="rover" class="${state.formation === 'rover' ? 'active' : ''}" role="tab" aria-selected="${state.formation === 'rover'}">Right-side rover</button></div>
+      ${state.formation === 'four' ? `<label class="right-shift-toggle"><input id="right-shift" type="checkbox" ${state.rightShift ? 'checked' : ''}> Right shift</label>` : ''}
       <div class="inning-tabs"><span>View inning</span><div>${Array.from({ length: 7 }, (_, index) => `<button data-inning="${index + 1}" class="${state.previewInning[state.formation] === index + 1 ? 'active' : ''}" aria-label="View inning ${index + 1}" aria-pressed="${state.previewInning[state.formation] === index + 1}">${index + 1}</button>`).join('')}</div></div>
-      <div class="field-wrap"><div class="field" aria-label="Kickball field"><div class="grass-stripe one"></div><div class="grass-stripe two"></div><div class="outfield-arc"></div><div class="infield-dirt"></div><div class="basepath"></div><div class="pitcher-circle"></div><span class="base second"></span><span class="base first"></span><span class="base third"></span><span class="base home"></span><div class="field-spots">${[...INFIELD, ...OUTFIELD[state.formation]].map(fieldSlot).join('')}</div></div><div class="field-hint">${state.previewInning[state.formation] !== 1 ? `Inning ${state.previewInning[state.formation]} preview. Return to inning 1 to edit the starting defense.` : state.formation === 'rover' ? 'Rover is the fourth outfielder. Keep them in the outfield, toward the 1B–2B gap.' : 'Outfielders stay in the outfield until the ball is kicked.'}</div></div>
+      <div class="field-wrap"><div class="field${usesRightShift(state.formation) ? ' right-shift' : ''}" aria-label="Kickball field"><div class="grass-stripe one"></div><div class="grass-stripe two"></div><div class="outfield-arc"></div><div class="infield-dirt"></div><div class="basepath"></div><div class="pitcher-circle"></div><span class="base second"></span><span class="base first"></span><span class="base third"></span><span class="base home"></span><div class="field-spots">${[...INFIELD, ...OUTFIELD[state.formation]].map(fieldSlot).join('')}</div></div><div class="field-hint">${state.previewInning[state.formation] !== 1 ? `Inning ${state.previewInning[state.formation]} preview. Return to inning 1 to edit the starting defense.` : state.formation === 'rover' ? 'Rover is the fourth outfielder. Keep them in the outfield, toward the 1B–2B gap.' : state.rightShift ? 'RF covers most of the right half. RCF plays just right of center.' : 'Outfielders stay in the outfield until the ball is kicked.'}</div></div>
       <div class="field-actions"><button id="clear-field" class="quiet-button" ${state.previewInning[state.formation] !== 1 ? 'disabled' : ''}>Clear this defense</button><button id="copy-field" class="quiet-button" ${state.previewInning[state.formation] !== 1 ? 'disabled' : ''}>Copy to other defense</button></div>
       <div class="bench"><div class="subheading"><h3>Available on bench</h3><span>${active.filter(p => !onField.has(p.id)).length}</span></div><div class="bench-list drop-target" data-drop="bench">${active.filter(p => !onField.has(p.id)).map(p => playerChip(p, 'bench')).join('') || '<span class="bench-empty">Everyone is on the field</span>'}</div></div>${fieldRotationPanel()}</section>
       ${orderPanel(active, checks.order)}
     </main>
-    <section class="rules-panel"><div class="rules-title"><div><h2>Lineup checks</h2><p>Based on the TRI SPORTS rules, revised February 2025</p></div><div class="print-controls"><label for="print-configuration">Print / PDF</label><select id="print-configuration"><option value="both" ${printConfiguration === 'both' ? 'selected' : ''}>Both defenses</option><option value="rover" ${printConfiguration === 'rover' ? 'selected' : ''}>Rover only</option><option value="four" ${printConfiguration === 'four' ? 'selected' : ''}>4 outfielders only</option></select><button id="print-lineup" class="print-button" ${printReady(checks) ? '' : 'disabled'}>Print ready lineup</button></div></div><div class="check-grid">${reportMarkup(checks.four, 'four')}${reportMarkup(checks.rover, 'rover')}<div class="check-row ${checks.order.ready ? 'good' : 'warn'}"><span class="check-icon">${checks.order.ready ? '✓' : '!'}</span><span><strong>Kicking order</strong><small>${checks.order.split ? state.rotations.M.length + state.rotations.W.length : state.order.length} kickers · ${checks.order.women} women</small></span><b>${labelStatus(checks.order.ready, checks.order.missing.length > 0)}</b></div></div><div class="issue-list">${[...new Set([...current.issues, ...checks.order.issues])].map(issue => `<p>• ${esc(issue)}</p>`).join('') || '<p class="all-clear">This defense and kicking order pass the lineup checks.</p>'}</div><p class="rules-footnote">10 fielders: 6 infield + 4 outfield, with 4+ women. 9 fielders: 6 infield + 3 outfield, with 3+ women. All available players kick. Alternate genders when possible, and never place 3 men consecutively. When one full order cannot satisfy that, the board runs separate gender rotations starting M/W/M, with two men between women thereafter. Set your order before the game; the league restricts changes during play.</p></section>
-    <section class="print-sheet ${checks.order.split ? 'split-print' : ''}"><div class="print-header"><div><h1>Kickball lineup</h1><p>Game: ____________________ &nbsp; Date: __________</p></div><div class="print-ready">${printReady(checks) ? 'READY LINEUP' : 'DRAFT LINEUP'}</div></div><div class="print-defenses ${printConfiguration === 'both' ? '' : 'single-defense'}">${printFormations().map(printDefense).join('')}</div><section class="print-kicking"><h2>Kicking order</h2>${printOrder()}</section></section>
+    <section class="rules-panel"><div class="rules-title"><div><h2>Lineup checks</h2><p>Based on the TRI SPORTS rules, revised February 2025</p></div><div class="print-controls"><label for="print-configuration">Print / PDF</label><select id="print-configuration"><option value="rover" ${printConfiguration === 'rover' ? 'selected' : ''}>Rover only</option><option value="four" ${printConfiguration === 'four' ? 'selected' : ''}>4 outfielders only</option></select><button id="print-lineup" class="print-button" ${printReady(checks) ? '' : 'disabled'}>Print ready lineup</button></div></div><div class="check-grid">${reportMarkup(checks.four, 'four')}${reportMarkup(checks.rover, 'rover')}<div class="check-row ${checks.order.ready ? 'good' : 'warn'}"><span class="check-icon">${checks.order.ready ? '✓' : '!'}</span><span><strong>Kicking order</strong><small>${checks.order.split ? state.rotations.M.length + state.rotations.W.length : state.order.length} kickers · ${checks.order.women} women</small></span><b>${labelStatus(checks.order.ready, checks.order.missing.length > 0)}</b></div></div><div class="issue-list">${[...new Set([...current.issues, ...checks.order.issues])].map(issue => `<p>• ${esc(issue)}</p>`).join('') || '<p class="all-clear">This defense and kicking order pass the lineup checks.</p>'}</div><p class="rules-footnote">10 fielders: 6 infield + 4 outfield, with 4+ women. 9 fielders: 6 infield + 3 outfield, with 3+ women. All available players kick. Alternate genders when possible, and never place 3 men consecutively. When one full order cannot satisfy that, the board runs separate gender rotations starting M/W/M, with two men between women thereafter. Set your order before the game; the league restricts changes during play.</p></section>
+    <section class="print-sheet"><div class="print-header"><div><h1>Kickball lineup</h1><p>Game: ____________________ &nbsp; Date: __________</p></div><div class="print-ready">${printReady(checks) ? 'READY LINEUP' : 'DRAFT LINEUP'}</div></div><div class="print-layout">${printDefense(printConfiguration)}<section class="print-kicking"><h2>Kicking order</h2>${printOrder()}</section></div></section>
     ${message ? `<div class="toast" role="status">${esc(message)}</div>` : ''}
   </div>`;
   bindEvents();
@@ -381,7 +394,7 @@ function moveToBench(id) {
 function syncDraftMembers() {
   if (!draftGroup) return;
   const starters = draftGroup.slots.map(pos => state.fields[draftGroup.formation][pos]).filter(Boolean);
-  const extras = draftGroup.members.filter(id => !starters.includes(id) && !Object.values(state.fields[draftGroup.formation]).includes(id));
+  const extras = draftGroup.members.filter(id => !starters.includes(id));
   draftGroup.members = [...new Set([...starters, ...extras])];
 }
 function moveToOrder(id, index = state.order.length) {
@@ -461,6 +474,11 @@ function bindEvents() {
     update();
   }));
   document.querySelectorAll('[data-formation]').forEach(button => button.addEventListener('click', () => { state.formation = button.dataset.formation; draftGroup = null; update(); }));
+  document.getElementById('right-shift')?.addEventListener('change', event => {
+    state.rightShift = event.target.checked;
+    update();
+    document.getElementById('right-shift')?.focus();
+  });
   document.querySelectorAll('[data-inning]').forEach(button => button.addEventListener('click', () => { state.previewInning[state.formation] = Number(button.dataset.inning); draftGroup = null; update(); }));
   document.getElementById('new-group').addEventListener('click', () => { draftGroup = { id: crypto.randomUUID(), name: '', slots: [], members: [], formation: state.formation, editing: false }; render(); });
   document.querySelectorAll('[data-edit-group]').forEach(button => button.addEventListener('click', () => {
@@ -482,7 +500,12 @@ function bindEvents() {
   document.getElementById('cancel-group')?.addEventListener('click', () => { draftGroup = null; render(); });
   document.querySelectorAll('[data-group-slot]').forEach(button => button.addEventListener('click', () => {
     const pos = button.dataset.groupSlot;
-    draftGroup.slots = draftGroup.slots.includes(pos) ? draftGroup.slots.filter(item => item !== pos) : [...draftGroup.slots, pos];
+    if (draftGroup.slots.includes(pos)) {
+      draftGroup.slots = draftGroup.slots.filter(item => item !== pos);
+      draftGroup.members = draftGroup.members.filter(id => id !== state.fields[draftGroup.formation][pos]);
+    } else {
+      draftGroup.slots.push(pos);
+    }
     syncDraftMembers();
     render();
   }));
@@ -540,7 +563,7 @@ function bindEvents() {
   });
   document.getElementById('clear-roster').addEventListener('click', () => {
     if (!window.confirm('Clear the roster, both defenses, and the kicking order?')) return;
-    state = { players: [], order: [], rotations: { M: [], W: [] }, fields: { four: {}, rover: {} }, fieldRotations: { four: [], rover: [] }, previewInning: { four: 1, rover: 1 }, formation: 'four', selected: null, sample: false };
+    state = { players: [], order: [], rotations: { M: [], W: [] }, fields: { four: {}, rover: {} }, fieldRotations: { four: [], rover: [] }, previewInning: { four: 1, rover: 1 }, formation: 'four', rightShift: false, selected: null, sample: false };
     draftGroup = null;
     update();
   });

@@ -3,17 +3,40 @@ const vm = require('vm');
 const assert = require('assert');
 const code = fs.readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
 const element = { innerHTML: '', addEventListener() {}, classList: { add() {}, remove() {} } };
-const localStorage = { getItem() { return null; }, setItem() {} };
+let toggleRightShift;
+const rightShiftInput = { addEventListener(_, handler) { toggleRightShift = handler; }, focus() {} };
+const savedValues = new Map();
+const localStorage = { getItem(key) { return savedValues.get(key) ?? null; }, setItem(key, value) { savedValues.set(key, value); } };
 const context = vm.createContext({
-  document: { getElementById() { return element; }, querySelectorAll() { return []; } },
+  document: { getElementById(id) { return id === 'right-shift' ? rightShiftInput : element; }, querySelectorAll() { return []; } },
   window: { clearTimeout() {}, setTimeout() {}, confirm() { return true; }, print() {} },
   localStorage, structuredClone, crypto: require('crypto').webcrypto, console
 });
 vm.runInContext(code, context);
 const check = expression => vm.runInContext(expression, context);
 assert.equal(check('status().ready'), true, 'sample should be ready');
+assert.equal(check('printConfiguration'), 'four', 'print should default to the starting field configuration');
 assert.equal(check('fieldReport("four").women'), 5);
 assert.equal(check('fieldReport("rover").ready'), true);
+assert.match(element.innerHTML, /id="right-shift" type="checkbox"\s*>/);
+const originalFourField = check('JSON.stringify(fieldForInning("four"))');
+const originalRoverPrint = check('printDefense("rover")');
+toggleRightShift({ target: { checked: true } });
+assert.match(element.innerHTML, /id="right-shift" type="checkbox" checked/);
+assert.match(check('fieldSlot("RCF")'), /--x:55%;--y:16%/);
+assert.match(check('printDefense("four")'), /Right shift[\s\S]*--x:55%;--y:16%"><strong>RCF/);
+assert.equal(check('printDefense("rover")'), originalRoverPrint);
+assert.equal(check('JSON.stringify(fieldForInning("four"))'), originalFourField);
+assert.equal(check('JSON.parse(localStorage.getItem(STORAGE_KEY)).rightShift'), true);
+assert.equal(check('parseLineupDocument(JSON.stringify(lineupDocument())).rightShift'), true);
+const olderLineup = JSON.parse(check('JSON.stringify(lineupDocument())'));
+delete olderLineup.lineup.rightShift;
+assert.equal(check('parseLineupDocument')(JSON.stringify(olderLineup)).rightShift, false);
+check('state.formation = "rover"; render()');
+assert.doesNotMatch(element.innerHTML, /id="right-shift"/);
+check('state.formation = "four"; render()');
+toggleRightShift({ target: { checked: false } });
+assert.match(check('fieldSlot("RCF")'), /--x:62%;--y:19%/);
 check('state.order = ["sample-1","sample-2","sample-4","sample-0","sample-3","sample-5","sample-6","sample-7","sample-8","sample-9","sample-10","sample-11"]');
 assert.equal(check('orderReport().ready'), false, 'three men at wrap should fail');
 assert.ok(check('orderReport().issues.some(x => x.includes("Three men"))'));
@@ -24,16 +47,19 @@ check('state.players.forEach(p => { if (!state.rotations[p.gender].includes(p.id
 assert.equal(check('orderReport().ready'), true, 'both complete rotations should be ready');
 check('render()');
 assert.ok(element.innerHTML.includes("Men's rotation") && element.innerHTML.includes("Women's rotation"), 'split UI should render both lanes');
-assert.ok(element.innerHTML.includes('Next 30 kicks'), 'split UI should render preview');
+assert.ok(element.innerHTML.includes('Next 60 kicks'), 'split UI should render preview');
+const screenKickPreview = element.innerHTML.match(/<div class="preview-grid">([\s\S]*?)<\/div><\/div><div class="order-footer">/)?.[1];
+const kickNumbers = Array.from({ length: 60 }, (_, index) => String(index + 1));
+assert.deepEqual(Array.from((screenKickPreview || '').matchAll(/<b>(\d+)<\/b>/g), match => match[1]), kickNumbers, 'screen preview should list kicks 1 through 60 in order');
 const printKickPreview = check('printOrder()').match(/<div class="print-kick-grid">([\s\S]*?)<\/div>/)?.[1];
 assert.ok(printKickPreview, 'split printout should show the actual kick sequence');
-assert.equal((printKickPreview.match(/<span /g) || []).length, 30, 'printout should show the first 30 kicks');
+assert.deepEqual(Array.from(printKickPreview.matchAll(/<b>(\d+)\.<\/b>/g), match => match[1]), kickNumbers, 'printout should list kicks 1 through 60 in order');
 assert.match(printKickPreview, /<b>1\.<\/b> 5<\/span><span class="woman"><b>2\.<\/b> 0<\/span><span class=""><b>3\.<\/b> 6<\/span>/, 'printed sequence should start man, woman, man');
 assert.equal(check('generatedKicks(39).length'), 39);
 assert.equal(check('generatedKicks(39).every((id,i) => player(id).gender === (i % 3 === 1 ? "W" : "M"))'), true, 'sequence must start MWM and keep two men between women');
-assert.equal(check('generatedKicks(30).map(id => player(id).gender).slice(0,3).join("")'), 'MWM', 'first three kicks should be man, woman, man');
-assert.equal(check('generatedKicks(30).map(id => player(id).gender).slice(-2).join("")'), 'WM', '30-kick preview should end woman, man');
-assert.equal(check('generatedKicks(32).map(id => player(id).gender).slice(28).join("")'), 'WMMW', 'pattern should continue across the preview boundary');
+assert.equal(check('generatedKicks().map(id => player(id).gender).slice(0,3).join("")'), 'MWM', 'first three kicks should be man, woman, man');
+assert.equal(check('generatedKicks().map(id => player(id).gender).slice(-2).join("")'), 'WM', '60-kick preview should end woman, man');
+assert.equal(check('generatedKicks(62).map(id => player(id).gender).slice(58).join("")'), 'WMMW', 'pattern should continue across the preview boundary');
 assert.equal(check('generatedKicks(39).filter(id => player(id).gender === "M").slice(0,13).every((id,i) => id === state.rotations.M[i])'), true, 'men retain their own rotation');
 assert.equal(check('generatedKicks(39).filter(id => player(id).gender === "W").slice(0,10).every((id,i) => id === state.rotations.W[i%5])'), true, 'women repeat independently');
 check('state.fields = {four:{},rover:{}}');
@@ -75,21 +101,43 @@ assert.ok(element.innerHTML.includes('print-sheet') && element.innerHTML.include
 check('state.fields.four.RF = "sample-10"; state.fieldRotations.four[0].members = ["sample-2","sample-11"]; state.players.push({id:"sample-12",name:"Extra",gender:"M",active:true}); state.fieldRotations.four[1].members = ["sample-7","sample-8","sample-12"]');
 assert.equal(check('status().four.ready'), false, 'later inning with only 3 women must fail');
 assert.ok(check('status().four.issues.some(issue => issue.includes("Inning 2"))'), 'later inning issue should be visible');
+check(`state = sampleState();
+  state.fieldRotations.four = [
+    { id: 'first', name: 'First base', slots: ['1B'], members: ['sample-2', 'sample-10', 'sample-11'] },
+    { id: 'left', name: 'Left field', slots: ['LF'], members: ['sample-6', 'sample-11', 'sample-10'] }
+  ];
+  draftGroup = { ...structuredClone(state.fieldRotations.four[1]), formation: 'four', editing: true };`);
+assert.match(check('groupBuilder()'), /class="choice chosen" data-group-member="sample-10"/, 'a bench player stays selectable after joining another group');
+assert.match(check('groupBuilder()'), /data-group-member="sample-2"/, 'a player starting in another rotation can be added');
+assert.doesNotMatch(check('groupBuilder()'), /data-group-member="sample-1"/, 'a player at a fixed spot cannot be added');
+assert.equal(check('status().four.ready'), true, 'shared players may cover different groups in different innings');
+assert.equal(check('fieldForInning("four",2)["1B"]'), 'sample-10');
+assert.equal(check('fieldForInning("four",3).LF'), 'sample-10');
+assert.doesNotMatch(check('groupCard(state.fieldRotations.four[1])'), /Bench: Jamie/, 'a player covering another group is not on the bench');
+assert.equal(parseLineupDocument(check('JSON.stringify(lineupDocument())')).fieldRotations.four.filter(group => group.members.includes('sample-10')).length, 2, 'shared membership survives export and import');
+check(`state.fieldRotations.four[1].members = ['sample-6', 'sample-10', 'sample-11']; draftGroup = null;`);
+assert.ok(check('status().four.issues.includes("Inning 2: Jamie is assigned to multiple spots (1B, LF).")'), 'lineup checks identify the inning, player, and both spots');
+assert.equal(check('printConfiguration = "four"; printReady()'), false, 'a double assignment blocks ready printing');
+check(`state.fieldRotations.four[0].members = ['sample-2', 'sample-6'];
+  draftGroup = { ...structuredClone(state.fieldRotations.four[1]), members: ['sample-6', 'sample-2'], formation: 'four', editing: true };
+  syncDraftMembers();
+  state.fieldRotations.four[1].members = [...draftGroup.members];
+  draftGroup = null;`);
+assert.equal(check('status().four.ready'), true, 'two players can start in separate groups and swap spots in later innings');
+assert.equal(check('fieldForInning("four",2).LF'), 'sample-2');
 check('state = sampleState()');
-for (const configuration of ['both', 'rover', 'four']) {
+for (const configuration of ['rover', 'four']) {
   check(`printConfiguration = '${configuration}'; render()`);
   const sheet = element.innerHTML.slice(element.innerHTML.indexOf('<section class="print-sheet'));
-  assert.equal((sheet.match(/class="print-defense"/g) || []).length, configuration === 'both' ? 2 : 1, 'print only the selected defenses');
-  assert.equal(sheet.includes('4 across outfield'), configuration !== 'rover');
-  assert.equal(sheet.includes('Right-side rover'), configuration !== 'four');
-  assert.ok(sheet.includes('Kicking order'), 'every print selection keeps the kicking order');
+  assert.equal((sheet.match(/class="print-defense"/g) || []).length, 1, 'print exactly one defense');
+  assert.equal(sheet.includes('4 across outfield'), configuration === 'four');
+  assert.equal(sheet.includes('Right-side rover'), configuration === 'rover');
+  assert.match(sheet, /<div class="print-layout"><section class="print-defense">[\s\S]*?<\/section><section class="print-kicking"><h2>Kicking order<\/h2>/, 'the print layout should place the defense and kicking order side by side');
   assert.ok(check('printReady()'), 'valid sample can print in every configuration');
 }
 check('state.fields.rover = {}; printConfiguration = "four"; render()');
 assert.equal(check('printReady()'), true, 'an incomplete omitted defense must not block printing');
 assert.ok(!/id="print-lineup"[^>]*disabled/.test(element.innerHTML), 'selected valid defense enables print button');
-check('printConfiguration = "both"');
-assert.equal(check('printReady()'), false, 'both defenses must pass when both are selected');
 check('printConfiguration = "rover"; render()');
 assert.equal(check('printReady()'), false, 'selected incomplete defense blocks printing');
 assert.ok(/id="print-lineup"[^>]*disabled/.test(element.innerHTML), 'invalid selected defense disables print button');
@@ -98,5 +146,4 @@ check('state = sampleState(); state.fields.four = {}; printConfiguration = "rove
 assert.equal(check('printReady()'), true, 'rover can print when four outfielders is incomplete');
 check('state.order = []');
 assert.equal(check('printReady()'), false, 'the kicking order must pass even for one defense');
-check('state = sampleState(); printConfiguration = "both"');
 console.log('Lineup rules checks passed.');
